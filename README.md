@@ -1,7 +1,7 @@
 message
 -------
 
-Check the [godoc](http://godoc.org/github.com/twmb/channel).
+Check the [godoc](http://godoc.org/github.com/twmb/message).
 
 Package message is useful for when you want to continue reading
 after receiving an "end of messages" error. Sometimes, you just
