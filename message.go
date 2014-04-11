@@ -6,6 +6,8 @@ package message
 import (
 	"errors"
 	"sync"
+	"sync/atomic"
+	"time"
 )
 
 // EOMs is the error returned when a Getter has no more messages
@@ -23,6 +25,24 @@ var EOMs = errors.New("EOMs")
 // is ready to be got.
 type Getter interface {
 	GetMessage() (msg []byte, err error)
+}
+
+// BlockGetter is the basic interface that wraps BlockGetMessage.
+//
+// BlockGetMessage like GetMessage but blocks until a message is
+// available. By design, this means that BlockGetMessage should
+// never return EOMs.
+type BlockGetter interface {
+	BlockGetMessage() (msg []byte, err error)
+}
+
+// BlockTimeoutGetter is the basic interface that wraps BlockTimeoutGetMessage.
+//
+// BlockTimeoutGetMessage is like BlockGetMessage except with a timeout
+// for waiting for a new message. If no message is received within that
+// timeout, BlockTimeoutGetMessage returns EOMs.
+type BlockTimeoutGetter interface {
+	BlockTimeoutGetMessage(time.Duration) (msg []byte, err error)
 }
 
 // Sender is the basic interface that wraps SendMessage.
@@ -48,9 +68,33 @@ type AckGetter interface {
 	AckMsgGot() error
 }
 
-// GetSender is a Sender and a Getter.
+// BlockAckGetter wraps BlockGetter and AckMsgGot.
+type BlockAckGetter interface {
+	BlockGetter
+	AckMsgGot() error
+}
+
+// BlockTimeoutAckGetter wraps BlockTimeoutGetter and AckMsgGot.
+type BlockTimeoutAckGetter interface {
+	BlockTimeoutGetter
+	AckMsgGot() error
+}
+
+// GetSender is a Getter and a Sender.
 type GetSender interface {
 	Getter
+	Sender
+}
+
+// BlockGetSender is a BlockGetter and a Sender.
+type BlockGetSender interface {
+	BlockGetter
+	Sender
+}
+
+// BlockTimeoutGetSender is a BlockTimeoutGetter and a Sender.
+type BlockTimeoutGetSender interface {
+	BlockTimeoutGetter
 	Sender
 }
 
@@ -60,16 +104,33 @@ type AckGetSender interface {
 	Sender
 }
 
+// BlockAckGetSender is a BlockAckGetter and a Sender.
+type BlockAckGetSender interface {
+	BlockAckGetter
+	Sender
+}
+
+// BlockTimeoutAckGetSender is a BlockTimeoutAckGetter and a Sender.
+type BlockTimeoutAckGetSender interface {
+	BlockTimeoutAckGetter
+	Sender
+}
+
 // Strings is a struct that wraps a string slice
 // to implement the GetSender interface in a
 // concurrency-safe way.
 type Strings struct {
 	m sync.Mutex
 	s []string
+	c *sync.Cond
+	t time.Timer
 }
 
+// NewStrings creates a new Strings to use. It must be called
+// to use any Block functions.
 func NewStrings(source []string) *Strings {
-	return &Strings{s: source}
+	var m sync.Mutex
+	return &Strings{m: m, s: source, c: sync.NewCond(&m)}
 }
 
 // TODO: when https://code.google.com/p/go/issues/detail?id=6980
@@ -87,11 +148,44 @@ func (s *Strings) GetMessage() ([]byte, error) {
 	return msg, nil
 }
 
+func (s *Strings) BlockGetMessage() ([]byte, error) {
+	s.m.Lock()
+	for len(s.s) == 0 {
+		s.c.Wait()
+	}
+	msg := []byte(s.s[0])
+	s.s = s.s[1:]
+	s.m.Unlock()
+	return msg, nil
+}
+
+func (s *Strings) BlockTimeoutGetMessage(d time.Duration) ([]byte, error) {
+	s.m.Lock()
+	defer s.m.Unlock()
+	var timeout int32
+	t := time.AfterFunc(d, func() {
+		atomic.StoreInt32(&timeout, 1)
+		// alright to broadcast because of for loop managing s.c.Wait()
+		s.c.Broadcast()
+	})
+	for len(s.s) == 0 && atomic.LoadInt32(&timeout) == 0 {
+		s.c.Wait()
+	}
+	t.Stop()
+	if atomic.LoadInt32(&timeout) == 1 {
+		return nil, EOMs
+	}
+	msg := []byte(s.s[0])
+	s.s = s.s[1:]
+	return msg, nil
+}
+
 func (s *Strings) SendMessage(m []byte) (int, error) {
 	s.m.Lock()
 	s.s = append(s.s, string(m))
 	l := len(m)
 	s.m.Unlock()
+	s.c.Signal()
 	return l, nil
 }
 
@@ -101,10 +195,12 @@ func (s *Strings) SendMessage(m []byte) (int, error) {
 type ByteStrings struct {
 	m sync.Mutex
 	s [][]byte
+	c *sync.Cond
 }
 
 func NewByteStrings(source [][]byte) *ByteStrings {
-	return &ByteStrings{s: source}
+	var m sync.Mutex
+	return &ByteStrings{m: m, s: source, c: sync.NewCond(&m)}
 }
 
 func (b *ByteStrings) GetMessage() ([]byte, error) {
@@ -119,10 +215,42 @@ func (b *ByteStrings) GetMessage() ([]byte, error) {
 	return msg, nil
 }
 
+func (b *ByteStrings) BlockGetMessage() ([]byte, error) {
+	b.m.Lock()
+	for len(b.s) == 0 {
+		b.c.Wait()
+	}
+	msg := b.s[0]
+	b.s = b.s[1:]
+	b.m.Unlock()
+	return msg, nil
+}
+
+func (b *ByteStrings) BlockTimeoutGetMessage(d time.Duration) ([]byte, error) {
+	b.m.Lock()
+	defer b.m.Unlock()
+	var timeout int32
+	t := time.AfterFunc(d, func() {
+		atomic.StoreInt32(&timeout, 1)
+		b.c.Broadcast()
+	})
+	for len(b.s) == 0 && atomic.LoadInt32(&timeout) == 0 {
+		b.c.Wait()
+	}
+	t.Stop()
+	if atomic.LoadInt32(&timeout) == 1 {
+		return nil, EOMs
+	}
+	msg := b.s[0]
+	b.s = b.s[1:]
+	return msg, nil
+}
+
 func (b *ByteStrings) SendMessage(m []byte) (int, error) {
 	b.m.Lock()
 	b.s = append(b.s, m)
 	l := len(m)
 	b.m.Unlock()
+	b.c.Signal()
 	return l, nil
 }
