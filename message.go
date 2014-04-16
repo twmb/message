@@ -14,6 +14,12 @@ import (
 // to give after a call to GetMessage.
 var EOMs = errors.New("EOMs")
 
+// MarshalTester is an interface that wraps Marshalled, a function
+// that returns whether the messager will return marshalled data.
+type MarshalTester interface {
+	Marshalled() bool
+}
+
 // Getter is the basic interface that wraps GetMessage.
 //
 // GetMessage should return a non-empty message. Empty messages
