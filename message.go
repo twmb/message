@@ -195,6 +195,18 @@ func (s *Strings) SendMessage(m []byte) (int, error) {
 	return l, nil
 }
 
+type MarshalledStrings struct {
+	Strings
+}
+
+func NewMarshalledStrings(source []string) *MarshalledStrings {
+	return &MarshalledStrings{*NewStrings(source)}
+}
+
+func (ms *MarshalledStrings) Marshalled() bool {
+	return true
+}
+
 // ByteStrings is a struct that wraps a slice of
 // byte slices to implement the GetSender interface
 // in a concurrency-safe way.
@@ -259,4 +271,16 @@ func (b *ByteStrings) SendMessage(m []byte) (int, error) {
 	b.m.Unlock()
 	b.c.Signal()
 	return l, nil
+}
+
+type MarshalledByteStrings struct {
+	ByteStrings
+}
+
+func NewMarshalledByteStrings(source [][]byte) *MarshalledByteStrings {
+	return &MarshalledByteStrings{*NewByteStrings(source)}
+}
+
+func (mb *MarshalledByteStrings) Marshalled() bool {
+	return true
 }
