@@ -51,6 +51,13 @@ type BlockTimeoutGetter interface {
 	BlockTimeoutGetMessage(time.Duration) (msg []byte, err error)
 }
 
+// BlockWakeGetter is an wraps BlockGetter with a function to
+// force return early with an EOMs error.
+type BlockWakeGetter interface {
+	BlockGetter
+	Wake()
+}
+
 // Sender is the basic interface that wraps SendMessage.
 //
 // SendMessage returns the number of bytes sent and an
@@ -86,6 +93,12 @@ type BlockTimeoutAckGetter interface {
 	AckMsgGot() error
 }
 
+// BlockWakeAckGetter wraps BlockWakeGetter and AckMsgGot.
+type BlockWakeAckGetter interface {
+	BlockWakeGetter
+	AckMsgGot() error
+}
+
 // GetSender is a Getter and a Sender.
 type GetSender interface {
 	Getter
@@ -101,6 +114,12 @@ type BlockGetSender interface {
 // BlockTimeoutGetSender is a BlockTimeoutGetter and a Sender.
 type BlockTimeoutGetSender interface {
 	BlockTimeoutGetter
+	Sender
+}
+
+// BlockWakeGetSender is a BlockWakeGetter and a Sender.
+type BlockWakeGetSender interface {
+	BlockWakeGetter
 	Sender
 }
 
@@ -122,21 +141,33 @@ type BlockTimeoutAckGetSender interface {
 	Sender
 }
 
+// BlockWakeAckGetSender is a BlockWakeAckGetter and a Sender
+type BlockWakeAckGetSender interface {
+	BlockWakeAckGetter
+	Sender
+}
+
 // Strings is a struct that wraps a string slice
 // to implement the GetSender interface in a
 // concurrency-safe way.
 type Strings struct {
-	m sync.Mutex
-	s []string
-	c *sync.Cond
-	t time.Timer
+	m    sync.Mutex
+	s    []string
+	c    *sync.Cond
+	t    time.Timer
+	wake chan struct{}
 }
 
 // NewStrings creates a new Strings to use. It must be called
 // to use any Block functions.
 func NewStrings(source []string) *Strings {
 	var m sync.Mutex
-	return &Strings{m: m, s: source, c: sync.NewCond(&m)}
+	return &Strings{
+		m:    m,
+		s:    source,
+		c:    sync.NewCond(&m),
+		wake: make(chan struct{}),
+	}
 }
 
 // TODO: when https://code.google.com/p/go/issues/detail?id=6980
@@ -155,14 +186,36 @@ func (s *Strings) GetMessage() ([]byte, error) {
 }
 
 func (s *Strings) BlockGetMessage() ([]byte, error) {
+	var err error
 	s.m.Lock()
-	for len(s.s) == 0 {
-		s.c.Wait()
+	wakecpy := s.wake
+out:
+	for {
+		select {
+		case <-wakecpy:
+			err = EOMs
+			break out
+		default:
+			if len(s.s) != 0 {
+				break out
+			} else {
+				s.c.Wait()
+			}
+		}
 	}
 	msg := []byte(s.s[0])
 	s.s = s.s[1:]
 	s.m.Unlock()
-	return msg, nil
+	return msg, err
+}
+
+func (s *Strings) Wake() {
+	s.m.Lock()
+	wakeold := s.wake
+	s.wake = make(chan struct{})
+	close(wakeold)
+	s.m.Unlock()
+	s.c.Broadcast()
 }
 
 func (s *Strings) BlockTimeoutGetMessage(d time.Duration) ([]byte, error) {
@@ -211,14 +264,20 @@ func (ms *MarshalledStrings) Marshalled() bool {
 // byte slices to implement the GetSender interface
 // in a concurrency-safe way.
 type ByteStrings struct {
-	m sync.Mutex
-	s [][]byte
-	c *sync.Cond
+	m    sync.Mutex
+	s    [][]byte
+	c    *sync.Cond
+	wake chan struct{}
 }
 
 func NewByteStrings(source [][]byte) *ByteStrings {
 	var m sync.Mutex
-	return &ByteStrings{m: m, s: source, c: sync.NewCond(&m)}
+	return &ByteStrings{
+		m:    m,
+		s:    source,
+		c:    sync.NewCond(&m),
+		wake: make(chan struct{}),
+	}
 }
 
 func (b *ByteStrings) GetMessage() ([]byte, error) {
@@ -234,14 +293,36 @@ func (b *ByteStrings) GetMessage() ([]byte, error) {
 }
 
 func (b *ByteStrings) BlockGetMessage() ([]byte, error) {
+	var err error
 	b.m.Lock()
-	for len(b.s) == 0 {
-		b.c.Wait()
+	wakecpy := b.wake
+out:
+	for {
+		select {
+		case <-wakecpy:
+			err = EOMs
+			break out
+		default:
+			if len(b.s) != 0 {
+				break out
+			} else {
+				b.c.Wait()
+			}
+		}
 	}
 	msg := b.s[0]
 	b.s = b.s[1:]
 	b.m.Unlock()
-	return msg, nil
+	return msg, err
+}
+
+func (b *ByteStrings) Wake() {
+	b.m.Lock()
+	wakeold := b.wake
+	b.wake = make(chan struct{})
+	close(wakeold)
+	b.m.Unlock()
+	b.c.Broadcast()
 }
 
 func (b *ByteStrings) BlockTimeoutGetMessage(d time.Duration) ([]byte, error) {
