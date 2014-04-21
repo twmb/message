@@ -151,7 +151,7 @@ type BlockWakeAckGetSender interface {
 // to implement the GetSender interface in a
 // concurrency-safe way.
 type Strings struct {
-	m    sync.Mutex
+	m    *sync.Mutex // pointer so doesn't copy
 	s    []string
 	c    *sync.Cond
 	t    time.Timer
@@ -163,7 +163,7 @@ type Strings struct {
 func NewStrings(source []string) *Strings {
 	var m sync.Mutex
 	return &Strings{
-		m:    m,
+		m:    &m,
 		s:    source,
 		c:    sync.NewCond(&m),
 		wake: make(chan struct{}),
@@ -264,7 +264,7 @@ func (ms *MarshalledStrings) Marshalled() bool {
 // byte slices to implement the GetSender interface
 // in a concurrency-safe way.
 type ByteStrings struct {
-	m    sync.Mutex
+	m    *sync.Mutex
 	s    [][]byte
 	c    *sync.Cond
 	wake chan struct{}
@@ -273,7 +273,7 @@ type ByteStrings struct {
 func NewByteStrings(source [][]byte) *ByteStrings {
 	var m sync.Mutex
 	return &ByteStrings{
-		m:    m,
+		m:    &m,
 		s:    source,
 		c:    sync.NewCond(&m),
 		wake: make(chan struct{}),
