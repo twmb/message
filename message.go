@@ -188,13 +188,13 @@ func (s *Strings) GetMessage() ([]byte, error) {
 func (s *Strings) BlockGetMessage() ([]byte, error) {
 	var err error
 	s.m.Lock()
+	defer s.m.Unlock()
 	wakecpy := s.wake
 out:
 	for {
 		select {
 		case <-wakecpy:
-			err = EOMs
-			break out
+			return nil, EOMs
 		default:
 			if len(s.s) != 0 {
 				break out
@@ -205,7 +205,6 @@ out:
 	}
 	msg := []byte(s.s[0])
 	s.s = s.s[1:]
-	s.m.Unlock()
 	return msg, err
 }
 
@@ -295,13 +294,13 @@ func (b *ByteStrings) GetMessage() ([]byte, error) {
 func (b *ByteStrings) BlockGetMessage() ([]byte, error) {
 	var err error
 	b.m.Lock()
+	defer b.m.Unlock()
 	wakecpy := b.wake
 out:
 	for {
 		select {
 		case <-wakecpy:
-			err = EOMs
-			break out
+			return nil, EOMs
 		default:
 			if len(b.s) != 0 {
 				break out
@@ -312,7 +311,6 @@ out:
 	}
 	msg := b.s[0]
 	b.s = b.s[1:]
-	b.m.Unlock()
 	return msg, err
 }
 
